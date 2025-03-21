@@ -37,12 +37,8 @@ jobs:
           sudo apt-get upgrade -y
           sudo apt-get install -y build-essential curl wget unzip git
 
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-          cache: 'gradle'
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Checkout app repository
         uses: actions/checkout@v4
@@ -58,6 +54,12 @@ jobs:
           token: ${{ env.GITHUB_TOKEN }}
           path: libs
 
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
@@ -69,6 +71,26 @@ jobs:
           echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
           echo "CACHE_PREFIX=${{ runner.os }}-gradle" >> $GITHUB_ENV
           echo "CACHE_KEY=${{ runner.os }}-gradle-$BUILD_DATE" >> $GITHUB_ENV
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          restore-keys: ${{ env.CACHE_PREFIX }}
+          key: ${{ env.CACHE_KEY }}
+          path: |
+            ~/.gradle
+
+      - name: Clean Gradle Cache
+        run: |
+          # 清理锁定文件和临时文件
+          if [ -d "~/.gradle" ]; then
+            find "~/.gradle" $ -name "*.lock" -o -name "*.tmp" $ -type f -delete
+          fi
+
+          # 清理旧版依赖
+          if [ -d "~/.gradle/caches/modules-2" ]; then
+            find "~/.gradle/caches/modules-2" -atime +30 -type f -delete
+          fi
 
       - name: Build libs
         working-directory: ./libs
@@ -214,4 +236,21 @@ jobs:
             if [ "${{ inputs.enable_logs }}" = "true" ]; then
               echo "$UPLOAD_RESULT"
             fi
+          fi
+
+      - name: Clear Old Cache
+        run: |
+          # 列出所有缓存并过滤掉当前使用的缓存
+          CACHE_LIST=$(gh cache list --key ${{ env.CACHE_PREFIX }} | grep -v "${{ env.CACHE_KEY }}" | cut -f 1)
+          
+          # 如果有旧缓存，则清理
+          if [ ! -z "$CACHE_LIST" ]; then
+            echo "清理旧的 Gradle 缓存..."
+            for CACHE_KEY in $CACHE_LIST; do
+              gh cache delete $CACHE_KEY --confirm
+              echo "已删除缓存: $CACHE_KEY"
+            done
+            echo "旧缓存清理完成！"
+          else
+            echo "没有需要清理的旧缓存"
           fi
