@@ -247,7 +247,7 @@ jobs:
           if [ ! -z "$CACHE_LIST" ]; then
             echo "清理旧的 Gradle 缓存..."
             for CACHE_KEY in $CACHE_LIST; do
-              gh cache delete $CACHE_KEY --confirm
+              gh cache delete $CACHE_KEY
               echo "已删除缓存: $CACHE_KEY"
             done
             echo "旧缓存清理完成！"
