@@ -117,10 +117,10 @@ jobs:
             if [ -f "./gradlew" ]; then
               echo ">>> 执行 generateBaselineProfile in $REPO_NAME"
               chmod +x ./gradlew
-              ./gradlew generateBaselineProfile -q || {
-                echo "❌ generateBaselineProfile 失败: $REPO_NAME"
-                exit 1
-              }
+#              ./gradlew generateBaselineProfile -q || {
+#                echo "❌ generateBaselineProfile 失败: $REPO_NAME"
+#                exit 1
+#              }
 
               echo ">>> 执行 publishToMavenLocal in $REPO_NAME"
               ./gradlew publishToMavenLocal -q || {
@@ -138,7 +138,6 @@ jobs:
         working-directory: ./libs
         run: |
           chmod +x ./gradlew
-          ./gradlew generateBaselineProfile -q
           ./gradlew publishToMavenLocal -q
 
       - name: Build app
