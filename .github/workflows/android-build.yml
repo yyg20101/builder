@@ -25,6 +25,9 @@ env:
   WORKFLOW_NUMBER: ${{ github.run_number }}
   # 特定工作流运行的重试次数
   WORKFLOW_ATTEMPT: ${{ github.run_attempt }}
+  # 多个 repo 使用空格分隔，格式为 repo_name=repo_url
+  EXTERNAL_REPOS: |
+    coil=https://github.com/coil-kt/coil.git
 
 jobs:
   build:
@@ -91,6 +94,39 @@ jobs:
           if [ -d "~/.gradle/caches/modules-2" ]; then
             find "~/.gradle/caches/modules-2" -atime +30 -type f -delete
           fi
+
+      - name: Clone and Build External Repositories
+        run: |
+          echo "解析 EXTERNAL_REPOS 环境变量并开始处理..."
+
+          # 将换行转换为空格，避免换行解析问题
+          REPO_LIST=$(echo "${EXTERNAL_REPOS}" | tr '\n' ' ')
+
+          for item in $REPO_LIST; do
+            REPO_NAME=$(echo "$item" | cut -d'=' -f1)
+            REPO_URL=$(echo "$item" | cut -d'=' -f2-)
+
+            echo ">>> 克隆仓库: $REPO_NAME"
+            git clone --depth 1 "$REPO_URL" "$REPO_NAME" || {
+              echo "❌ 克隆失败: $REPO_NAME"
+              exit 1
+            }
+
+            cd "$REPO_NAME"
+
+            if [ -f "./gradlew" ]; then
+              echo ">>> 执行 publishToMavenLocal in $REPO_NAME"
+              chmod +x ./gradlew
+              ./gradlew publishToMavenLocal -q || {
+                echo "❌ 构建失败: $REPO_NAME"
+                exit 1
+              }
+            else
+              echo "⚠️ 跳过 $REPO_NAME：没有 gradlew"
+            fi
+
+            cd ..
+          done
 
       - name: Build libs
         working-directory: ./libs
