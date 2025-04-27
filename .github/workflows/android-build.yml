@@ -27,7 +27,7 @@ env:
   WORKFLOW_ATTEMPT: ${{ github.run_attempt }}
   # 多个 repo 使用空格分隔，格式为 repo_name=repo_url
   EXTERNAL_REPOS: |
-    coil=https://github.com/coil-kt/coil.git
+    
 
 jobs:
   build:
