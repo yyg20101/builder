@@ -192,7 +192,7 @@ jobs:
         env:
           BDUSS: ${{ secrets.BAIDU_BDUSS }}
           STOKEN: ${{ secrets.BAIDU_STOKEN }}
-          TARGET_DIR: /apps/android/dc/${{ env.BUILD_DATE }}/releases/
+          TARGET_DIR: /apps/android/dc/${{ env.BUILD_DATE }}/${{ env.WORKFLOW_NUMBER }}/releases/
           SRC_DIR: ${{ env.RELEASE_PATH }}
         run: |
           # 定义日志函数
