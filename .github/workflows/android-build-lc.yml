@@ -1,0 +1,296 @@
+name: Android Build For LC
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: '上传到 GitHub Release'
+        type: boolean
+        default: false
+      upload_to_baidu:
+        description: '上传到百度网盘'
+        type: boolean
+        default: false
+      enable_logs:
+        description: '启用详细日志'
+        type: boolean
+        default: false
+# 基础配置（公共参数）
+env:
+  # GitHub Token，用于访问私有仓库
+  GITHUB_TOKEN: ${{secrets.PRIVATE_REPO_TOKEN}}
+  # 当前工作流运行的唯一标识符
+  WORKFLOW_ID: ${{ github.run_id }}
+  # 此仓库中工作流运行的序号（从 1 开始递增）
+  WORKFLOW_NUMBER: ${{ github.run_number }}
+  # 特定工作流运行的重试次数
+  WORKFLOW_ATTEMPT: ${{ github.run_attempt }}
+  # 多个 repo 使用空格分隔，格式为 repo_name=repo_url
+  EXTERNAL_REPOS: |
+  #  coil=https://github.com/coil-kt/coil.git
+  # 时区
+  TZ: Asia/Shanghai
+    
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Update Linux System
+        run: |
+          sudo apt-get update
+          sudo apt-get upgrade -y
+          sudo apt-get install -y build-essential curl wget unzip git
+          sudo timedatectl set-timezone "$TZ"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout app repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.REPO_LC }}
+          token: ${{ env.GITHUB_TOKEN }}
+          path: app_android
+
+      - name: Checkout libs repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.REPO_LIBS }}
+          token: ${{ env.GITHUB_TOKEN }}
+          path: libs
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Environment Variables
+        id: date
+        run: |
+          BUILD_DATE=$(date +'%Y%m%d')
+          echo "date=$BUILD_DATE" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
+          echo "CACHE_PREFIX=${{ runner.os }}-gradle" >> $GITHUB_ENV
+          echo "CACHE_KEY=${{ runner.os }}-gradle-$BUILD_DATE" >> $GITHUB_ENV
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          restore-keys: ${{ env.CACHE_PREFIX }}
+          key: ${{ env.CACHE_KEY }}
+          path: |
+            ~/.gradle
+
+      - name: Clean Gradle Cache
+        run: |
+          # 清理锁定文件和临时文件
+          if [ -d "~/.gradle" ]; then
+            find "~/.gradle" $ -name "*.lock" -o -name "*.tmp" $ -type f -delete
+          fi
+
+          # 清理旧版依赖
+          if [ -d "~/.gradle/caches/modules-2" ]; then
+            find "~/.gradle/caches/modules-2" -atime +30 -type f -delete
+          fi
+
+      - name: Clone and Build External Repositories
+        run: |
+          echo "解析 EXTERNAL_REPOS 环境变量并开始处理..."
+
+          # 将换行转换为空格，避免换行解析问题
+          REPO_LIST=$(echo "${EXTERNAL_REPOS}" | tr '\n' ' ')
+
+          for item in $REPO_LIST; do
+            REPO_NAME=$(echo "$item" | cut -d'=' -f1)
+            REPO_URL=$(echo "$item" | cut -d'=' -f2-)
+
+            echo ">>> 克隆仓库: $REPO_NAME"
+            git clone --depth 1 "$REPO_URL" "$REPO_NAME" || {
+              echo "❌ 克隆失败: $REPO_NAME"
+              exit 1
+            }
+
+            cd "$REPO_NAME"
+
+            if [ -f "./gradlew" ]; then
+              chmod +x ./gradlew
+              echo ">>> 执行 publishToMavenLocal in $REPO_NAME"
+              ./gradlew publishToMavenLocal -q || {
+                echo "❌ publishToMavenLocal 失败: $REPO_NAME"
+                exit 1
+              }
+            else
+              echo "⚠️ 跳过 $REPO_NAME：没有 gradlew"
+            fi
+
+            cd ..
+          done
+
+      - name: Build libs
+        working-directory: ./libs
+        run: |
+          chmod +x ./gradlew
+          ./gradlew publishToMavenLocal -q
+
+      - name: Build app
+        working-directory: ./app_android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease -q
+          echo "APP_PATH=$PWD" >> $GITHUB_ENV
+          echo "BUILD_OUTPUTS_DIR=$APP_PATH/app/build/outputs" >> $GITHUB_ENV
+
+      - name: Collect artifacts
+        run: |
+          # 定义路径常量
+          ARTIFACTS_DIR="$GITHUB_WORKSPACE/release-artifacts"
+          BUILD_OUTPUTS_DIR="$APP_PATH/app/build/outputs"
+          
+          # 清理并创建收集目录
+          rm -rf "$ARTIFACTS_DIR"
+          mkdir -p "$ARTIFACTS_DIR"
+          
+          # 收集所有 APK 文件
+          find "$BUILD_OUTPUTS_DIR" -name "*.apk" -exec cp {} "$ARTIFACTS_DIR/" \;
+          
+          # 处理 mapping 文件
+          MAPPING_DIR="$BUILD_OUTPUTS_DIR/mapping"
+          if [ -d "$MAPPING_DIR" ]; then
+            echo "找到 mapping 目录，开始压缩..."
+            cd "$MAPPING_DIR"
+            zip -r "$ARTIFACTS_DIR/mapping.zip" .
+            echo "mapping 文件压缩完成"
+          else
+            echo "警告: mapping 目录不存在 ($MAPPING_DIR)"
+          fi
+          
+          # 验证收集的文件
+          echo "收集的文件列表："
+          ls -lh "$ARTIFACTS_DIR"
+          
+          # 设置全局环境变量
+          echo "RELEASE_PATH=$ARTIFACTS_DIR" >> $GITHUB_ENV
+
+      - name: Upload Outputs To Release
+        if: ${{ inputs.upload_to_release }}
+        uses: ncipollo/release-action@v1
+        with:
+          name: ${{ steps.date.outputs.date }}
+          allowUpdates: true
+          tag: ${{ steps.date.outputs.date }}
+          token: ${{ env.GITHUB_TOKEN }}
+          artifacts: ${{ env.RELEASE_PATH }}/*
+
+      - name: Upload to Baidu Netdisk
+        if: ${{ inputs.upload_to_baidu }}
+        env:
+          BDUSS: ${{ secrets.BAIDU_BDUSS }}
+          STOKEN: ${{ secrets.BAIDU_STOKEN }}
+          TARGET_DIR: /apps/android/lc/${{ env.BUILD_DATE }}/${{ env.WORKFLOW_NUMBER }}/releases/
+          SRC_DIR: ${{ env.RELEASE_PATH }}
+        run: |
+          # 定义日志函数
+          log() {
+            if [ "${{ inputs.enable_logs }}" = "true" ]; then
+              echo "$1"
+            else
+              # 关键信息始终显示
+              if [[ "$1" == *"错误"* || "$1" == *"成功"* || "$1" == *"开始"* ]]; then
+                echo "$1"
+              fi
+            fi
+          }
+          
+          # 执行命令的函数
+          run_cmd() {
+            if [ "${{ inputs.enable_logs }}" = "true" ]; then
+              "$@"
+            else
+              "$@" >/dev/null 2>&1
+            fi
+            return $?
+          }
+          
+          # 下载最新版 BaiduPCS-Go
+          log "下载 BaiduPCS-Go 工具..."
+          BAIDUPCS_VERSION="v3.9.7"
+          run_cmd wget -q "https://github.com/qjfoidnh/BaiduPCS-Go/releases/download/$BAIDUPCS_VERSION/BaiduPCS-Go-$BAIDUPCS_VERSION-linux-amd64.zip"
+          run_cmd unzip -q "BaiduPCS-Go-$BAIDUPCS_VERSION-linux-amd64.zip" -d baidupcs-tmp
+          
+          # 调试：列出解压后的文件
+          if [ "${{ inputs.enable_logs }}" = "true" ]; then
+            ls -l baidupcs-tmp
+          fi
+          
+          # 安装到系统路径
+          sudo find baidupcs-tmp -name "BaiduPCS-Go*" -type f -executable -exec mv {} /usr/local/bin/BaiduPCS-Go \;
+          
+          # 验证安装
+          if ! command -v BaiduPCS-Go &> /dev/null; then
+            log "错误: BaiduPCS-Go 安装失败！"
+            exit 1
+          fi
+          
+          # 清理临时文件
+          run_cmd rm -rf baidupcs-tmp *.zip
+          log "BaiduPCS-Go 安装成功！"
+          
+          # 配置客户端
+          log "配置 BaiduPCS-Go 客户端..."
+          run_cmd BaiduPCS-Go config set -max_parallel 10
+          run_cmd BaiduPCS-Go config set -max_upload_parallel 10
+          run_cmd BaiduPCS-Go config set -upload_policy rsync
+          
+          # 配置百度账号
+          log "正在登录百度网盘..."
+          if ! run_cmd BaiduPCS-Go login -bduss="$BDUSS" -stoken="$STOKEN"; then
+            log "错误: 百度网盘登录失败，请检查凭据"
+            exit 1
+          fi
+          
+          # 创建目标目录
+          log "创建目标目录: $TARGET_DIR"
+          run_cmd BaiduPCS-Go mkdir "$TARGET_DIR"
+          
+          # 上传文件
+          log "开始上传文件到 $TARGET_DIR..."
+          if ! run_cmd BaiduPCS-Go upload --norapid --retry 5 "$SRC_DIR/" "$TARGET_DIR/"; then
+            log "错误: 文件上传失败"
+            exit 1
+          fi
+          
+          # 验证上传结果
+          log "验证上传结果..."
+          UPLOAD_RESULT=$(BaiduPCS-Go ls "$TARGET_DIR")
+          if [ -z "$UPLOAD_RESULT" ]; then
+            log "错误: 上传失败，目标目录为空！"
+            exit 1
+          else
+            log "上传成功！目录内容："
+            if [ "${{ inputs.enable_logs }}" = "true" ]; then
+              echo "$UPLOAD_RESULT"
+            fi
+          fi
+
+      - name: Clear Old Cache
+        run: |
+          # 列出所有缓存并过滤掉当前使用的缓存
+          CACHE_LIST=$(gh cache list --key ${{ env.CACHE_PREFIX }} | grep -v "${{ env.CACHE_KEY }}" | cut -f 1)
+          
+          # 如果有旧缓存，则清理
+          if [ ! -z "$CACHE_LIST" ]; then
+            echo "清理旧的 Gradle 缓存..."
+            for CACHE_KEY in $CACHE_LIST; do
+              gh cache delete $CACHE_KEY
+              echo "已删除缓存: $CACHE_KEY"
+            done
+            echo "旧缓存清理完成！"
+          else
+            echo "没有需要清理的旧缓存"
+          fi
