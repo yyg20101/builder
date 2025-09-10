@@ -1,4 +1,4 @@
-name: Android Build LC
+name: Android Build YY
 
 on:
   workflow_dispatch:
