@@ -244,7 +244,7 @@ jobs:
 
           # 上传文件
           log "开始上传文件到 $TARGET_DIR..."
-          if ! run_cmd BaiduPCS-Go upload --norapid --retry 5 "$SRC_DIR/" "$TARGET_DIR/"; then
+          if ! run_cmd BaiduPCS-Go upload --retry 5 "$SRC_DIR/" "$TARGET_DIR/"; then
             log "错误: 文件上传失败"
             exit 1
           fi
