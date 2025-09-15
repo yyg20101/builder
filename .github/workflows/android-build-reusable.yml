@@ -203,7 +203,7 @@ jobs:
 
           # 下载最新版 BaiduPCS-Go
           log "下载 BaiduPCS-Go 工具..."
-          BAIDUPCS_VERSION="v3.9.7"
+          BAIDUPCS_VERSION="v3.9.9"
           run_cmd wget -q "https://github.com/qjfoidnh/BaiduPCS-Go/releases/download/$BAIDUPCS_VERSION/BaiduPCS-Go-$BAIDUPCS_VERSION-linux-amd64.zip"
           run_cmd unzip -q "BaiduPCS-Go-$BAIDUPCS_VERSION-linux-amd64.zip" -d baidupcs-tmp
 
