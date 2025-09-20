@@ -34,9 +34,7 @@ on:
         required: true
       REPO_LIBS:
         required: true
-      BAIDU_BDUSS:
-        required: false
-      BAIDU_STOKEN:
+      BAIDU_COOKIE:
         required: false
 
 # 基础配置（公共参数）
@@ -174,8 +172,7 @@ jobs:
       - name: Upload to Baidu Netdisk
         if: ${{ inputs.upload_to_baidu }}
         env:
-          BDUSS: ${{ secrets.BAIDU_BDUSS }}
-          STOKEN: ${{ secrets.BAIDU_STOKEN }}
+          BAIDU_COOKIE: ${{ secrets.BAIDU_COOKIE }}
           TARGET_DIR: ${{ inputs.baidu_target_dir }}/${{ env.BUILD_DATE }}/${{ github.run_number }}/${{ inputs.build_type }}/
           SRC_DIR: ${{ env.RELEASE_PATH }}
         run: |
@@ -233,7 +230,7 @@ jobs:
 
           # 配置百度账号
           log "正在登录百度网盘..."
-          if ! run_cmd BaiduPCS-Go login -bduss="$BDUSS" -stoken="$STOKEN"; then
+          if ! run_cmd BaiduPCS-Go login -cookies="$BAIDU_COOKIE"; then
             log "错误: 百度网盘登录失败，请检查凭据"
             exit 1
           fi
