@@ -37,5 +37,4 @@ jobs:
       PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
       APP_REPOSITORY: ${{ secrets.REPO_YY }}
       REPO_LIBS: ${{ secrets.REPO_LIBS }}
-      BAIDU_BDUSS: ${{ secrets.BAIDU_BDUSS }}
-      BAIDU_STOKEN: ${{ secrets.BAIDU_STOKEN }}
+      BAIDU_COOKIE: ${{ secrets.BAIDU_COOKIE }}
