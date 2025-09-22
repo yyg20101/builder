@@ -198,9 +198,20 @@ jobs:
             return $?
           }
 
+          # 动态获取 BaiduPCS-Go 的最新版本号
+          log "正在获取 BaiduPCS-Go 最新版本号..."
+          BAIDUPCS_VERSION=$(curl -s "https://api.github.com/repos/qjfoidnh/BaiduPCS-Go/releases/latest" | jq -r '.tag_name')
+
+          # 检查是否成功获取版本号，如果失败则使用一个已知的稳定版本作为后备
+          if [[ -z "$BAIDUPCS_VERSION" || "$BAIDUPCS_VERSION" == "null" ]]; then
+            log "错误: 无法动态获取最新版本号，将使用默认版本 v3.9.9"
+            BAIDUPCS_VERSION="v3.9.9"
+          else
+            log "成功获取最新版本号: $BAIDUPCS_VERSION"
+          fi
+
           # 下载最新版 BaiduPCS-Go
-          log "下载 BaiduPCS-Go 工具..."
-          BAIDUPCS_VERSION="v3.9.9"
+          log "开始下载 BaiduPCS-Go 工具 (版本: $BAIDUPCS_VERSION)..."
           run_cmd wget -q "https://github.com/qjfoidnh/BaiduPCS-Go/releases/download/$BAIDUPCS_VERSION/BaiduPCS-Go-$BAIDUPCS_VERSION-linux-amd64.zip"
           run_cmd unzip -q "BaiduPCS-Go-$BAIDUPCS_VERSION-linux-amd64.zip" -d baidupcs-tmp
 
