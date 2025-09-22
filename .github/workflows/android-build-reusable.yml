@@ -235,9 +235,8 @@ jobs:
 
           # 配置客户端
           log "配置 BaiduPCS-Go 客户端..."
-          run_cmd BaiduPCS-Go config set -max_parallel 10
-          run_cmd BaiduPCS-Go config set -max_upload_parallel 10
-          run_cmd BaiduPCS-Go config set -upload_policy rsync
+          # run_cmd BaiduPCS-Go config set -max_parallel 10
+          # run_cmd BaiduPCS-Go config set -max_upload_parallel 10
 
           # 配置百度账号
           log "正在登录百度网盘..."
