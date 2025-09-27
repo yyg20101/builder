@@ -1,0 +1,319 @@
+name: Reusable Android Build Workflow
+
+on:
+  workflow_call:
+    inputs:
+      java_version:
+        description: 'JDK 版本'
+        required: true
+        type: string
+      baidu_target_dir:
+        description: '百度网盘目标目录路径'
+        required: true
+        type: string
+      build_type:
+        description: '选择构建类型 (release 或 debug)'
+        type: string
+        default: 'release'
+      upload_to_release:
+        description: '上传到 GitHub Release (仅限 Release 构建)'
+        type: boolean
+        default: false
+      upload_to_baidu:
+        description: '上传到百度网盘'
+        type: boolean
+        default: false
+      enable_logs:
+        description: '为百度网盘上传启用详细日志'
+        type: boolean
+        default: false
+    secrets:
+      PRIVATE_REPO_TOKEN:
+        required: true
+      APP_REPOSITORY:
+        required: true
+      REPO_LIBS:
+        required: true
+      REPO_BEAUTY_LIBS:
+        required: true
+      BAIDU_COOKIE:
+        required: false
+
+# 基础配置（公共参数）
+env:
+  # GitHub Token，用于访问私有仓库和上传 Release
+  GITHUB_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+  # 仓库中 app module 的路径
+  APP_ANDROID_PATH: app_android
+  # 时区
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Update Linux System
+        run: |
+          sudo apt-get update
+          sudo apt-get upgrade -y
+          sudo apt-get install -y build-essential curl wget unzip git
+          sudo timedatectl set-timezone "$TZ"
+
+      - name: Checkout Main Repo
+        uses: actions/checkout@v4
+
+      - name: Checkout App Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.APP_REPOSITORY }}
+          token: ${{ env.GITHUB_TOKEN }}
+          path: ${{ env.APP_ANDROID_PATH }}
+
+      - name: Checkout Module Libs Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.REPO_LIBS }}
+          token: ${{ env.GITHUB_TOKEN }}
+          path: libs/module
+
+      - name: Checkout Beauty Libs Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.REPO_BEAUTY_LIBS }}
+          token: ${{ env.GITHUB_TOKEN }}
+          path: libs/beauty
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java_version }}
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Environment Variables
+        id: date
+        run: |
+          BUILD_DATE=$(date +'%Y%m%d')
+          echo "date=$BUILD_DATE" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_ENV
+          echo "CACHE_PREFIX=${{ runner.os }}-gradle" >> $GITHUB_ENV
+          # 缓存的 Key 每天更新一次
+          echo "CACHE_KEY=${{ runner.os }}-gradle-${BUILD_DATE}" >> $GITHUB_ENV
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          restore-keys: ${{ env.CACHE_PREFIX }}-
+          key: ${{ env.CACHE_KEY }}
+          path: |
+            ~/.gradle
+
+      - name: Clean Gradle Lockfiles
+        run: |
+          find ~/.gradle -name "*.lock" -type f -delete || echo "No lock files found in ~/.gradle"
+          find ${{ env.APP_ANDROID_PATH }} -name "*.lock" -type f -delete || echo "No lock files found in app project"
+          find libs -name "*.lock" -type f -delete || echo "No lock files found in libs project"
+
+      - name: Build module libs
+        working-directory: ./libs/module
+        run: |
+          chmod +x ./gradlew
+          ./gradlew publishToMavenLocal -q
+
+      - name: Build beauty libs
+        working-directory: ./libs/beauty
+        run: |
+          cd Android
+          # 定义脚本的路径
+          SCRIPT_PATH="./sync_with_upstream.sh"
+          # 检查脚本文件是否存在
+          if [ -f "$SCRIPT_PATH" ]; then
+            echo "✅ Sync script found at '$SCRIPT_PATH'. Executing..."
+            # 赋予脚本执行权限
+            chmod +x "$SCRIPT_PATH"
+            # 执行脚本
+            "$SCRIPT_PATH"
+          else
+            # 如果脚本不存在，则输出日志并正常退出
+            echo "ℹ️ Sync script not found at '$SCRIPT_PATH'. Skipping synchronization step."
+          fi
+          # 使用 setup-android action 设置的 ANDROID_HOME 环境变量来创建文件
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          chmod +x ./gradlew
+          ./gradlew :lib_sensetime:downloadVendorLibs :lib_cosmos:downloadVendorLibs :lib_bytedance:downloadVendorLibs
+          ./gradlew publishToMavenLocal -q
+
+      - name: Build Android App
+        working-directory: ./${{ env.APP_ANDROID_PATH }}
+        run: |
+          chmod +x ./gradlew
+          if [ "${{ inputs.build_type }}" = "release" ]; then
+            echo ">>> 开始构建 Release 版本 (./gradlew assembleRelease)..."
+            ./gradlew assembleRelease -q
+          else
+            echo ">>> 开始构建 Debug 版本 (./gradlew assembleDebug)..."
+            ./gradlew assembleDebug -q
+          fi
+          echo "✅ 构建任务完成。"
+
+      - name: Collect Artifacts
+        id: collect
+        run: |
+          ARTIFACTS_DIR="${{ github.workspace }}/artifacts"
+          rm -rf "$ARTIFACTS_DIR"
+          mkdir -p "$ARTIFACTS_DIR"
+          
+          echo ">>> 正在查找并收集 APK 文件..."
+          find "${{ env.APP_ANDROID_PATH }}/app/build/outputs/apk" -name "*.apk" -exec cp {} "$ARTIFACTS_DIR/" \;
+          
+          if [ "${{ inputs.build_type }}" = "release" ]; then
+            echo ">>> 正在查找并压缩 mapping 文件夹..."
+            MAPPING_BASE_DIR="${{ env.APP_ANDROID_PATH }}/app/build/outputs/mapping"
+            if [ -d "$MAPPING_BASE_DIR" ] && [ "$(ls -A $MAPPING_BASE_DIR)" ]; then
+              for dir in "$MAPPING_BASE_DIR"/*/; do
+                if [ -d "$dir" ]; then
+                  dir_name=$(basename "$dir")
+                  echo "找到 mapping 目录: $dir_name, 开始压缩..."
+                  (cd "$dir" && zip -r "${ARTIFACTS_DIR}/mapping-${dir_name}.zip" .)
+                fi
+              done
+            else
+              echo "⚠️ 警告: 未找到任何 mapping 输出目录。"
+            fi
+          fi
+          
+          echo ">>> 收集完成，产物列表如下："
+          ls -lhR "$ARTIFACTS_DIR"
+          
+          echo "RELEASE_PATH=$ARTIFACTS_DIR" >> $GITHUB_ENV
+
+      - name: Upload Outputs To GitHub Release
+        if: ${{ inputs.upload_to_release && inputs.build_type == 'release' }}
+        uses: ncipollo/release-action@v1
+        with:
+          name: ${{ steps.date.outputs.date }}
+          allowUpdates: true
+          tag: ${{ steps.date.outputs.date }}-${{ inputs.build_type }}
+          token: ${{ env.GITHUB_TOKEN }}
+          artifacts: "${{ env.RELEASE_PATH }}/*"
+          artifactErrorsFailBuild: true
+
+      - name: Upload to Baidu Netdisk
+        if: ${{ inputs.upload_to_baidu }}
+        env:
+          BAIDU_COOKIE: ${{ secrets.BAIDU_COOKIE }}
+          TARGET_DIR: ${{ inputs.baidu_target_dir }}/${{ env.BUILD_DATE }}/${{ github.run_number }}/${{ inputs.build_type }}/
+          SRC_DIR: ${{ env.RELEASE_PATH }}
+        run: |
+          # 定义日志函数
+          log() {
+            if [ "${{ inputs.enable_logs }}" = "true" ]; then
+              echo "$1"
+            else
+              # 关键信息始终显示
+              if [[ "$1" == *"错误"* || "$1" == *"成功"* || "$1" == *"开始"* ]]; then
+                echo "$1"
+              fi
+            fi
+          }
+
+          # 执行命令的函数
+          run_cmd() {
+            if [ "${{ inputs.enable_logs }}" = "true" ]; then
+              "$@"
+            else
+              "$@" >/dev/null 2>&1
+            fi
+            return $?
+          }
+
+          # 动态获取 BaiduPCS-Go 的最新版本号
+          log "正在获取 BaiduPCS-Go 最新版本号..."
+          BAIDUPCS_VERSION=$(curl -s "https://api.github.com/repos/qjfoidnh/BaiduPCS-Go/releases/latest" | jq -r '.tag_name')
+
+          # 检查是否成功获取版本号，如果失败则使用一个已知的稳定版本作为后备
+          if [[ -z "$BAIDUPCS_VERSION" || "$BAIDUPCS_VERSION" == "null" ]]; then
+            log "错误: 无法动态获取最新版本号，将使用默认版本 v3.9.9"
+            BAIDUPCS_VERSION="v3.9.9"
+          else
+            log "成功获取最新版本号: $BAIDUPCS_VERSION"
+          fi
+
+          # 下载最新版 BaiduPCS-Go
+          log "开始下载 BaiduPCS-Go 工具 (版本: $BAIDUPCS_VERSION)..."
+          run_cmd wget -q "https://github.com/qjfoidnh/BaiduPCS-Go/releases/download/$BAIDUPCS_VERSION/BaiduPCS-Go-$BAIDUPCS_VERSION-linux-amd64.zip"
+          run_cmd unzip -q "BaiduPCS-Go-$BAIDUPCS_VERSION-linux-amd64.zip" -d baidupcs-tmp
+
+          # 调试：列出解压后的文件
+          if [ "${{ inputs.enable_logs }}" = "true" ]; then
+            ls -l baidupcs-tmp
+          fi
+
+          # 安装到系统路径
+          sudo find baidupcs-tmp -name "BaiduPCS-Go*" -type f -executable -exec mv {} /usr/local/bin/BaiduPCS-Go \;
+
+          # 验证安装
+          if ! command -v BaiduPCS-Go &> /dev/null; then
+            log "错误: BaiduPCS-Go 安装失败！"
+            exit 1
+          fi
+
+          # 清理临时文件
+          run_cmd rm -rf baidupcs-tmp *.zip
+          log "BaiduPCS-Go 安装成功！"
+
+          # 配置客户端
+          log "配置 BaiduPCS-Go 客户端..."
+          # run_cmd BaiduPCS-Go config set -max_parallel 10
+          # run_cmd BaiduPCS-Go config set -max_upload_parallel 10
+
+          # 配置百度账号
+          log "正在登录百度网盘..."
+          if ! run_cmd BaiduPCS-Go login -cookies="$BAIDU_COOKIE"; then
+            log "错误: 百度网盘登录失败，请检查凭据"
+            exit 1
+          fi
+
+          # 创建目标目录
+          log "创建目标目录: $TARGET_DIR"
+          run_cmd BaiduPCS-Go mkdir "$TARGET_DIR"
+
+          # 上传文件
+          log "开始上传文件到 $TARGET_DIR..."
+          if ! run_cmd BaiduPCS-Go upload --retry 5 "$SRC_DIR/" "$TARGET_DIR/"; then
+            log "错误: 文件上传失败"
+            exit 1
+          fi
+
+          # 验证上传结果
+          log "验证上传结果..."
+          UPLOAD_RESULT=$(BaiduPCS-Go ls "$TARGET_DIR")
+          if [ -z "$UPLOAD_RESULT" ]; then
+            log "错误: 上传失败，目标目录为空！"
+            exit 1
+          else
+            log "上传成功！目录内容："
+            if [ "${{ inputs.enable_logs }}" = "true" ]; then
+              echo "$UPLOAD_RESULT"
+            fi
+          fi
+
+      - name: Clear Old Cache
+        run: |
+          # 列出所有缓存并过滤掉当前使用的缓存
+          CACHE_LIST=$(gh cache list --key ${{ env.CACHE_PREFIX }} | grep -v "${{ env.CACHE_KEY }}" | cut -f 1)
+
+          # 如果有旧缓存，则清理
+          if [ ! -z "$CACHE_LIST" ]; then
+            echo "清理旧的 Gradle 缓存..."
+            for CACHE_KEY in $CACHE_LIST; do
+              gh cache delete $CACHE_KEY
+              echo "已删除缓存: $CACHE_KEY"
+            done
+            echo "旧缓存清理完成！"
+          else
+            echo "没有需要清理的旧缓存"
+          fi

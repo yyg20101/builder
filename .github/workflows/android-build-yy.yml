@@ -1,0 +1,41 @@
+name: Android Build YY
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: '选择构建类型 (release 或 debug)'
+        type: choice
+        options:
+          - release
+          - debug
+        default: 'release'
+      upload_to_release:
+        description: '上传到 GitHub Release (仅限 Release 构建)'
+        type: boolean
+        default: false
+      upload_to_baidu:
+        description: '上传到百度网盘'
+        type: boolean
+        default: false
+      enable_logs:
+        description: '为百度网盘上传启用详细日志'
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/android-build-reusable.yml
+    with:
+      java_version: '21'
+      baidu_target_dir: '/apps/android/yy'
+      build_type: ${{ inputs.build_type }}
+      upload_to_release: ${{ inputs.upload_to_release }}
+      upload_to_baidu: ${{ inputs.upload_to_baidu }}
+      enable_logs: ${{ inputs.enable_logs }}
+    secrets:
+      PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+      APP_REPOSITORY: ${{ secrets.REPO_YY }}
+      REPO_LIBS: ${{ secrets.REPO_LIBS }}
+      REPO_BEAUTY_LIBS: ${{ secrets.REPO_BEAUTY_LIBS }}
+      BAIDU_COOKIE: ${{ secrets.BAIDU_COOKIE }}
